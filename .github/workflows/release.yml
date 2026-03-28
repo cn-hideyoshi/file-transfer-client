@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  APP_NAME: H-toolkit
+  APP_NAME: file-transfer-client
   WAILS_VERSION: v2.11.0
 
 jobs:
