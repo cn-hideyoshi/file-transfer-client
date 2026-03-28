@@ -83,6 +83,8 @@ const emit = defineEmits<{
   display: grid;
   gap: 20px;
   padding: 28px;
+  align-self: stretch;
+  align-content: start;
   color: #f5fbfc;
   background:
     radial-gradient(circle at top left, rgba(111, 217, 205, 0.28), transparent 38%),

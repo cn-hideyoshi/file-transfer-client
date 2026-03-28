@@ -1,4 +1,6 @@
 export type DownloadState = 'queued' | 'running' | 'done' | 'failed' | 'canceled'
+export type SortKey = 'name' | 'size' | 'modified'
+export type SortDirection = 'asc' | 'desc'
 
 export interface Settings {
   last_server_url: string
@@ -29,6 +31,11 @@ export interface Entry {
 export interface Directory {
   path: string
   entries: Entry[]
+}
+
+export interface SortState {
+  key: SortKey
+  direction: SortDirection
 }
 
 export interface DownloadRequest {

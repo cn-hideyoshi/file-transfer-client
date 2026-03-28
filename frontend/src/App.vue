@@ -18,20 +18,6 @@
       />
 
       <main class="workspace">
-        <header class="workspace__hero">
-          <div>
-            <span class="workspace__eyebrow">Remote file browser</span>
-            <h2>Browse once. Pull files fast.</h2>
-            <p>
-              连接一个 `file-transfer` 服务端，在桌面界面里浏览目录、挑选文件、跟踪下载任务。
-            </p>
-          </div>
-          <div class="workspace__pill" :class="{ 'workspace__pill--live': isConnected }">
-            <strong>{{ isConnected ? 'Live link' : 'Waiting' }}</strong>
-            <span>{{ isConnected ? connectedServer : 'Connect to get started' }}</span>
-          </div>
-        </header>
-
         <div v-if="banner" class="banner" :class="`banner--${banner.tone}`">
           {{ banner.message }}
         </div>
@@ -63,14 +49,22 @@
         <section v-else class="browser-layout">
           <div class="browser-layout__main card">
             <FileTable
-              :entries="directory.entries"
-              :current-path="directory.path"
+              :entries="sortedEntries"
+              :current-path="tablePath"
               :loading="browsing || loading"
+              :loading-title="tableLoadingTitle"
+              :loading-hint="tableLoadingHint"
+              :empty-title="tableEmptyTitle"
+              :empty-hint="tableEmptyHint"
+              :filter-text="filterText"
+              :sort-state="sortState"
               :selected-path="selectedPath"
               @select="selectedPath = $event.path"
               @open="handleOpenEntry"
               @navigate="loadDirectory"
-              @refresh="loadDirectory(directory.path || '/')"
+              @refresh="handleRefresh"
+              @update:filter-text="handleFilterUpdate"
+              @sort="handleSortChange"
             />
           </div>
 
@@ -161,7 +155,7 @@ import FileTable from './components/FileTable.vue'
 import ServerSidebar from './components/ServerSidebar.vue'
 import { api } from './lib/api'
 import { subscribeDownloadUpdates } from './lib/runtime'
-import type { AppState, Directory, DownloadTask, Entry, Settings } from './types'
+import type { AppState, Directory, DownloadTask, Entry, Settings, SortKey, SortState } from './types'
 
 type BannerTone = 'info' | 'success' | 'danger'
 
@@ -171,6 +165,16 @@ const emptySettings: Settings = {
   default_download_dir: '',
   recent_servers: [],
 }
+
+const defaultSortState: SortState = {
+  key: 'name',
+  direction: 'asc',
+}
+
+const nameCollator = new Intl.Collator(undefined, {
+  numeric: true,
+  sensitivity: 'base',
+})
 
 const loading = ref(true)
 const connecting = ref(false)
@@ -185,6 +189,8 @@ const draftDownloadDir = ref('')
 const settingsOpen = ref(false)
 
 const directory = ref<Directory>({ path: '/', entries: [] })
+const filterText = ref('')
+const sortState = ref<SortState>({ ...defaultSortState })
 const selectedPath = ref('')
 const tasks = ref<DownloadTask[]>([])
 
@@ -193,8 +199,21 @@ const banner = ref<{ tone: BannerTone; message: string } | null>(null)
 let unsubscribe: (() => void) | undefined
 
 const isConnected = computed(() => Boolean(connectedServer.value))
+const tablePath = computed(() => directory.value.path || '/')
+const filteredEntries = computed<Entry[]>(() => filterEntries(directory.value.entries, filterText.value))
+const sortedEntries = computed<Entry[]>(() => sortEntries(filteredEntries.value, sortState.value))
 const selectedEntry = computed<Entry | null>(() => {
-  return directory.value.entries.find((entry) => entry.path === selectedPath.value) || null
+  return sortedEntries.value.find((entry) => entry.path === selectedPath.value) || null
+})
+const tableLoadingTitle = 'Loading directory…'
+const tableLoadingHint = '正在从服务端拉取最新目录内容。'
+const tableEmptyTitle = computed(() => {
+  return filterText.value.trim() ? 'No matches in this folder.' : 'This folder is empty.'
+})
+const tableEmptyHint = computed(() => {
+  return filterText.value.trim()
+    ? '换个名称试试，或者清空过滤后继续浏览当前目录。'
+    : '换个路径看看，或者刷新一下当前目录。'
 })
 
 onMounted(async () => {
@@ -234,8 +253,9 @@ async function handleConnect(nextServer?: string): Promise<void> {
     settings.value = state.settings
     draftDownloadDir.value = state.settings.default_download_dir
     serverInput.value = state.server_url
+    filterText.value = ''
     selectedPath.value = ''
-    showBanner('Connection established.', 'success')
+    banner.value = null
     await loadDirectory('/')
   } catch (error) {
     showBanner(errorMessage(error), 'danger')
@@ -250,18 +270,31 @@ function handleRecent(serverURL: string): void {
 }
 
 async function loadDirectory(remotePath = '/'): Promise<void> {
+  filterText.value = ''
   browsing.value = true
   try {
     const next = await api.browse(remotePath)
     directory.value = next
-    if (!next.entries.some((entry) => entry.path === selectedPath.value)) {
-      selectedPath.value = next.entries[0]?.path || ''
-    }
+    syncSelection(sortedEntries.value)
   } catch (error) {
     showBanner(errorMessage(error), 'danger')
   } finally {
     browsing.value = false
   }
+}
+
+async function handleRefresh(): Promise<void> {
+  await loadDirectory(directory.value.path || '/')
+}
+
+function handleFilterUpdate(nextValue: string): void {
+  filterText.value = nextValue
+  syncSelection(sortedEntries.value)
+}
+
+function handleSortChange(key: SortKey): void {
+  sortState.value = nextSortState(sortState.value, key)
+  syncSelection(sortedEntries.value)
 }
 
 async function handleOpenEntry(entry: Entry): Promise<void> {
@@ -384,6 +417,86 @@ function showBanner(message: string, tone: BannerTone): void {
   banner.value = { message, tone }
 }
 
+function syncSelection(entries: Entry[]): void {
+  if (!entries.some((entry) => entry.path === selectedPath.value)) {
+    selectedPath.value = entries[0]?.path || ''
+  }
+}
+
+function filterEntries(entries: Entry[], keyword: string): Entry[] {
+  const normalizedKeyword = normalizeFilterKeyword(keyword)
+  if (!normalizedKeyword) {
+    return entries
+  }
+
+  return entries.filter((entry) => normalizeFilterKeyword(entry.name).includes(normalizedKeyword))
+}
+
+function nextSortState(current: SortState, key: SortKey): SortState {
+  if (current.key !== key) {
+    return { key, direction: 'asc' }
+  }
+  return {
+    key,
+    direction: current.direction === 'asc' ? 'desc' : 'asc',
+  }
+}
+
+function sortEntries(entries: Entry[], state: SortState): Entry[] {
+  return [...entries].sort((left, right) => compareEntries(left, right, state))
+}
+
+function compareEntries(left: Entry, right: Entry, state: SortState): number {
+  if (left.is_dir !== right.is_dir) {
+    return left.is_dir ? -1 : 1
+  }
+
+  switch (state.key) {
+    case 'size':
+      if (left.is_dir && right.is_dir) {
+        return compareByName(left, right)
+      }
+      return compareNumbers(left.size, right.size, state.direction, () => compareByName(left, right))
+    case 'modified':
+      return compareNumbers(
+        parseTimestamp(left.last_modified),
+        parseTimestamp(right.last_modified),
+        state.direction,
+        () => compareByName(left, right),
+      )
+    case 'name':
+    default:
+      return compareByName(left, right) * sortDirectionFactor(state.direction)
+  }
+}
+
+function compareByName(left: Entry, right: Entry): number {
+  return nameCollator.compare(left.name, right.name) || nameCollator.compare(left.path, right.path)
+}
+
+function compareNumbers(left: number, right: number, direction: SortState['direction'], fallback: () => number): number {
+  if (left === right) {
+    return fallback()
+  }
+  return (left - right) * sortDirectionFactor(direction)
+}
+
+function sortDirectionFactor(direction: SortState['direction']): number {
+  return direction === 'asc' ? 1 : -1
+}
+
+function parseTimestamp(value: string): number {
+  const stamp = Date.parse(value)
+  if (Number.isNaN(stamp)) {
+    return 0
+  }
+  return stamp
+}
+
+function normalizeFilterKeyword(value: string): string {
+  return value.trim().toLocaleLowerCase()
+}
+
 function formatStamp(value: string): string {
   if (!value) {
     return ''
@@ -463,38 +576,15 @@ function parentDirectory(filePath: string): string {
   z-index: 1;
   display: grid;
   grid-template-columns: 320px minmax(0, 1fr);
+  align-items: start;
   min-height: 100vh;
 }
 
 .workspace {
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 20px;
   padding: 28px;
-}
-
-.workspace__hero {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 20px;
-  padding: 24px 26px;
-  border-radius: 30px;
-  background: rgba(255, 255, 255, 0.62);
-  border: 1px solid rgba(255, 255, 255, 0.55);
-  box-shadow: 0 24px 50px rgba(18, 50, 71, 0.08);
-}
-
-.workspace__hero h2 {
-  margin: 8px 0 10px;
-  font-size: 2rem;
-}
-
-.workspace__hero p {
-  margin: 0;
-  max-width: 760px;
-  color: #5b7482;
-  line-height: 1.7;
 }
 
 .workspace__eyebrow {
@@ -503,20 +593,6 @@ function parentDirectory(filePath: string): string {
   font-size: 0.78rem;
   letter-spacing: 0.18em;
   text-transform: uppercase;
-}
-
-.workspace__pill {
-  display: grid;
-  gap: 8px;
-  min-width: 260px;
-  padding: 18px;
-  border-radius: 22px;
-  background: rgba(18, 50, 71, 0.06);
-  color: #47606d;
-}
-
-.workspace__pill strong {
-  font-size: 1rem;
 }
 
 .workspace__pill span {
@@ -603,6 +679,7 @@ function parentDirectory(filePath: string): string {
 .browser-layout {
   display: grid;
   grid-template-columns: minmax(0, 1.45fr) 360px;
+  align-items: start;
   gap: 20px;
   min-height: 0;
 }
@@ -612,9 +689,16 @@ function parentDirectory(filePath: string): string {
   min-height: 0;
 }
 
+.browser-layout__main {
+  display: grid;
+  gap: 18px;
+  align-content: start;
+}
+
 .browser-layout__side {
   display: grid;
   gap: 20px;
+  align-content: start;
 }
 
 .card {
@@ -641,6 +725,8 @@ function parentDirectory(filePath: string): string {
 .detail-card h3 {
   margin: 0;
   font-size: 1.35rem;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .detail-card__meta {
@@ -780,11 +866,6 @@ function parentDirectory(filePath: string): string {
   .browser-layout,
   .empty-stage {
     grid-template-columns: 1fr;
-  }
-
-  .workspace__hero {
-    flex-direction: column;
-    align-items: flex-start;
   }
 }
 </style>

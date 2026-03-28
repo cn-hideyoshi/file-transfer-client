@@ -12,25 +12,66 @@
           {{ crumb.label }}
         </button>
       </nav>
-      <button class="browser__refresh" type="button" @click="emit('refresh')">Refresh</button>
+      <div class="browser__toolbar-actions">
+        <input
+          :value="filterText"
+          class="browser__filter"
+          placeholder="Filter current folder"
+          spellcheck="false"
+          @input="emit('update:filterText', ($event.target as HTMLInputElement).value)"
+        />
+        <button
+          v-if="filterText"
+          class="browser__clear"
+          type="button"
+          @click="emit('update:filterText', '')"
+        >
+          Clear
+        </button>
+        <button class="browser__refresh" type="button" @click="emit('refresh')">Refresh</button>
+      </div>
     </header>
 
     <div class="browser__head">
-      <span>Name</span>
+      <button
+        class="browser__sort"
+        :class="{ 'browser__sort--active': isSortedBy('name') }"
+        type="button"
+        @click="emit('sort', 'name')"
+      >
+        <span>Name</span>
+        <span class="browser__sort-marker">{{ sortMarker('name') }}</span>
+      </button>
       <span>Kind</span>
-      <span>Size</span>
-      <span>Modified</span>
+      <button
+        class="browser__sort"
+        :class="{ 'browser__sort--active': isSortedBy('size') }"
+        type="button"
+        @click="emit('sort', 'size')"
+      >
+        <span>Size</span>
+        <span class="browser__sort-marker">{{ sortMarker('size') }}</span>
+      </button>
+      <button
+        class="browser__sort"
+        :class="{ 'browser__sort--active': isSortedBy('modified') }"
+        type="button"
+        @click="emit('sort', 'modified')"
+      >
+        <span>Modified</span>
+        <span class="browser__sort-marker">{{ sortMarker('modified') }}</span>
+      </button>
       <span>Action</span>
     </div>
 
     <div v-if="loading" class="browser__empty">
-      <strong>Loading directory…</strong>
-      <p>正在从服务端拉取最新目录内容。</p>
+      <strong>{{ loadingTitle }}</strong>
+      <p>{{ loadingHint }}</p>
     </div>
 
     <div v-else-if="!entries.length" class="browser__empty">
-      <strong>This folder is empty.</strong>
-      <p>换个路径看看，或者刷新一下当前目录。</p>
+      <strong>{{ emptyTitle }}</strong>
+      <p>{{ emptyHint }}</p>
     </div>
 
     <div v-else class="browser__rows">
@@ -68,20 +109,33 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { Entry } from '../types'
+import type { Entry, SortKey, SortState } from '../types'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   entries: Entry[]
   currentPath: string
   loading: boolean
   selectedPath: string
-}>()
+  filterText: string
+  sortState: SortState
+  loadingTitle?: string
+  loadingHint?: string
+  emptyTitle?: string
+  emptyHint?: string
+}>(), {
+  loadingTitle: 'Loading directory…',
+  loadingHint: '正在从服务端拉取最新目录内容。',
+  emptyTitle: 'This folder is empty.',
+  emptyHint: '换个路径看看，或者刷新一下当前目录。',
+})
 
 const emit = defineEmits<{
   (event: 'select', value: Entry): void
   (event: 'open', value: Entry): void
   (event: 'navigate', value: string): void
   (event: 'refresh'): void
+  (event: 'sort', value: SortKey): void
+  (event: 'update:filterText', value: string): void
 }>()
 
 const breadcrumbs = computed(() => {
@@ -141,6 +195,17 @@ function kindLabel(entry: Entry): string {
   }
   return 'File'
 }
+
+function isSortedBy(key: SortKey): boolean {
+  return props.sortState.key === key
+}
+
+function sortMarker(key: SortKey): string {
+  if (!isSortedBy(key)) {
+    return ''
+  }
+  return props.sortState.direction === 'asc' ? '^' : 'v'
+}
 </script>
 
 <style scoped>
@@ -163,6 +228,13 @@ function kindLabel(entry: Entry): string {
   align-items: center;
 }
 
+.browser__toolbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
 .browser__crumbs {
   display: flex;
   flex-wrap: wrap;
@@ -171,6 +243,7 @@ function kindLabel(entry: Entry): string {
 
 .browser__crumb,
 .browser__refresh,
+.browser__clear,
 .browser__action {
   border: none;
   cursor: pointer;
@@ -191,12 +264,53 @@ function kindLabel(entry: Entry): string {
   font-weight: 600;
 }
 
+.browser__filter {
+  width: min(260px, 100%);
+  min-width: 0;
+  padding: 10px 14px;
+  border: 1px solid rgba(18, 50, 71, 0.14);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.browser__clear {
+  padding: 10px 14px;
+  border-radius: 14px;
+  background: rgba(20, 78, 110, 0.08);
+  color: #164d65;
+  font-weight: 600;
+}
+
 .browser__head {
   padding: 0 18px;
   color: #607886;
   font-size: 0.88rem;
   text-transform: uppercase;
   letter-spacing: 0.06em;
+}
+
+.browser__sort {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+}
+
+.browser__sort--active {
+  color: #20516c;
+}
+
+.browser__sort-marker {
+  min-width: 0.75rem;
+  font-size: 0.78rem;
 }
 
 .browser__rows {
@@ -223,6 +337,10 @@ function kindLabel(entry: Entry): string {
   display: flex;
   align-items: center;
   gap: 14px;
+  min-width: 0;
+}
+
+.browser__name > div {
   min-width: 0;
 }
 
@@ -289,5 +407,19 @@ function kindLabel(entry: Entry): string {
 .browser__empty p {
   margin: 10px 0 0;
   color: #6d7f89;
+}
+
+@media (max-width: 920px) {
+  .browser__toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .browser__toolbar-actions {
+    justify-content: flex-start;
+  }
+
+  .browser__filter {
+    width: 100%;
+  }
 }
 </style>
