@@ -1,8 +1,11 @@
 :root {
-  color: #163347;
-  background:
+  --app-text: #163347;
+  --app-bg-solid: #f2f6f7;
+  --app-bg:
     radial-gradient(circle at top, rgba(151, 221, 214, 0.25), transparent 34%),
     linear-gradient(180deg, #eef6f8 0%, #f7f3ec 100%);
+  color: #163347;
+  background: var(--app-bg);
   font-family: "Aptos", "Noto Sans SC", "Segoe UI", sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -19,12 +22,16 @@
 html,
 body,
 #app {
+  width: 100%;
   min-height: 100vh;
+  background: var(--app-bg-solid);
 }
 
 body {
   margin: 0;
-  color: #163347;
+  color: var(--app-text);
+  background: var(--app-bg);
+  overflow-x: hidden;
 }
 
 body::before {

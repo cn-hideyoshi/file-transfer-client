@@ -79,6 +79,10 @@
                     <dd>{{ selectedEntry.path }}</dd>
                   </div>
                   <div>
+                    <dt>Backend URL</dt>
+                    <dd>{{ selectedEntryURL }}</dd>
+                  </div>
+                  <div>
                     <dt>Kind</dt>
                     <dd>{{ selectedEntry.is_dir ? 'Folder' : 'File' }}</dd>
                   </div>
@@ -95,8 +99,8 @@
                   <button type="button" @click="handleOpenEntry(selectedEntry)">
                     {{ selectedEntry.is_dir ? 'Enter folder' : 'Download file' }}
                   </button>
-                  <button class="detail-card__ghost" type="button" @click="copyRemotePath()">
-                    Copy path
+                  <button class="detail-card__ghost" type="button" @click="copySelectedEntryURL()">
+                    Copy URL
                   </button>
                 </div>
               </template>
@@ -154,7 +158,7 @@ import DownloadPanel from './components/DownloadPanel.vue'
 import FileTable from './components/FileTable.vue'
 import ServerSidebar from './components/ServerSidebar.vue'
 import { api } from './lib/api'
-import { subscribeDownloadUpdates } from './lib/runtime'
+import { setClipboardText, subscribeDownloadUpdates } from './lib/runtime'
 import type { AppState, Directory, DownloadTask, Entry, Settings, SortKey, SortState } from './types'
 
 type BannerTone = 'info' | 'success' | 'danger'
@@ -204,6 +208,12 @@ const filteredEntries = computed<Entry[]>(() => filterEntries(directory.value.en
 const sortedEntries = computed<Entry[]>(() => sortEntries(filteredEntries.value, sortState.value))
 const selectedEntry = computed<Entry | null>(() => {
   return sortedEntries.value.find((entry) => entry.path === selectedPath.value) || null
+})
+const selectedEntryURL = computed(() => {
+  if (!selectedEntry.value || !connectedServer.value) {
+    return ''
+  }
+  return buildRemoteResourceURL(connectedServer.value, selectedEntry.value.path)
 })
 const tableLoadingTitle = 'Loading directory…'
 const tableLoadingHint = '正在从服务端拉取最新目录内容。'
@@ -350,16 +360,16 @@ async function handleOpenFolder(task: DownloadTask): Promise<void> {
   }
 }
 
-async function copyRemotePath(): Promise<void> {
-  if (!selectedEntry.value) {
+async function copySelectedEntryURL(): Promise<void> {
+  if (!selectedEntryURL.value) {
     return
   }
 
   try {
-    await navigator.clipboard.writeText(selectedEntry.value.path)
-    showBanner('Remote path copied.', 'success')
+    await setClipboardText(selectedEntryURL.value)
+    showBanner('Backend URL copied.', 'success')
   } catch {
-    showBanner('Copy path failed in the current environment.', 'danger')
+    showBanner('Copy URL failed in the current environment.', 'danger')
   }
 }
 
@@ -421,6 +431,58 @@ function syncSelection(entries: Entry[]): void {
   if (!entries.some((entry) => entry.path === selectedPath.value)) {
     selectedPath.value = entries[0]?.path || ''
   }
+}
+
+function buildRemoteResourceURL(serverURL: string, remotePath: string): string {
+  const url = new URL(serverURL)
+  url.pathname = joinURLPath(url.pathname, remoteRequestPath(remotePath))
+  url.search = ''
+  url.hash = ''
+  try {
+    return decodeURI(url.toString())
+  } catch {
+    return url.toString()
+  }
+}
+
+function joinURLPath(basePath: string, requestPath: string): string {
+  const trimmedBase = basePath.replace(/\/+$/, '')
+  if (!trimmedBase || trimmedBase === '/') {
+    return requestPath
+  }
+  return `${trimmedBase}${requestPath}`
+}
+
+function remoteRequestPath(remotePath: string): string {
+  const cleaned = normalizeRemotePath(remotePath)
+  if (cleaned === '/') {
+    return '/files/'
+  }
+  return `/files${cleaned}`
+}
+
+function normalizeRemotePath(remotePath: string): string {
+  const trimmed = remotePath.trim()
+  if (!trimmed) {
+    return '/'
+  }
+
+  const normalizedSegments: string[] = []
+  for (const segment of trimmed.split('/')) {
+    if (!segment || segment === '.') {
+      continue
+    }
+    if (segment === '..') {
+      normalizedSegments.pop()
+      continue
+    }
+    normalizedSegments.push(segment)
+  }
+
+  if (!normalizedSegments.length) {
+    return '/'
+  }
+  return `/${normalizedSegments.join('/')}`
 }
 
 function filterEntries(entries: Entry[], keyword: string): Entry[] {
@@ -546,8 +608,11 @@ function parentDirectory(filePath: string): string {
 <style scoped>
 .shell {
   position: relative;
+  width: 100%;
   min-height: 100vh;
-  overflow: hidden;
+  overflow-x: clip;
+  overflow-y: hidden;
+  isolation: isolate;
 }
 
 .shell__glow {
@@ -575,8 +640,10 @@ function parentDirectory(filePath: string): string {
   position: relative;
   z-index: 1;
   display: grid;
+  width: 100%;
   grid-template-columns: 320px minmax(0, 1fr);
   align-items: start;
+  min-width: 0;
   min-height: 100vh;
 }
 
@@ -585,6 +652,7 @@ function parentDirectory(filePath: string): string {
   grid-template-rows: auto minmax(0, 1fr);
   gap: 20px;
   padding: 28px;
+  min-width: 0;
 }
 
 .workspace__eyebrow {
@@ -681,6 +749,7 @@ function parentDirectory(filePath: string): string {
   grid-template-columns: minmax(0, 1.45fr) 360px;
   align-items: start;
   gap: 20px;
+  min-width: 0;
   min-height: 0;
 }
 
@@ -751,6 +820,7 @@ function parentDirectory(filePath: string): string {
 .detail-card__meta dd {
   margin: 8px 0 0;
   word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .detail-card__actions {
